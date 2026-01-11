@@ -1,0 +1,650 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>AIR CANVAS</title>
+    
+    <!-- Google Fonts -->
+    <link href="https://fonts.googleapis.com/css2?family=Rajdhani:wght@500;700&display=swap" rel="stylesheet">
+    
+    <!-- MediaPipe Dependencies -->
+    <script src="https://cdn.jsdelivr.net/npm/@mediapipe/camera_utils/camera_utils.js" crossorigin="anonymous"></script>
+    <script src="https://cdn.jsdelivr.net/npm/@mediapipe/control_utils/control_utils.js" crossorigin="anonymous"></script>
+    <script src="https://cdn.jsdelivr.net/npm/@mediapipe/drawing_utils/drawing_utils.js" crossorigin="anonymous"></script>
+    <script src="https://cdn.jsdelivr.net/npm/@mediapipe/hands/hands.js" crossorigin="anonymous"></script>
+
+    <style>
+        :root {
+            --hud-color: #00f3ff;
+            --hud-alert: #ff0055;
+            --hud-warn: #ffcc00;
+            --bg-dark: #050a10;
+        }
+
+        body {
+            margin: 0;
+            padding: 0;
+            background-color: var(--bg-dark);
+            color: var(--hud-color);
+            font-family: 'Rajdhani', sans-serif;
+            overflow: hidden;
+            height: 100vh;
+            width: 100vw;
+            user-select: none;
+        }
+
+        /* --- LAYERS --- */
+
+        /* 1. Camera Feed (Hidden, we draw it manually) */
+        .input_video { display: none; }
+
+        /* 2. Main Canvas (Video + Drawing + HUD Graphics) */
+        #output_canvas {
+            position: absolute;
+            left: 0; top: 0;
+            width: 100%; height: 100%;
+            transform: scaleX(-1); /* Mirror Mode */
+            z-index: 1;
+        }
+
+        /* 3. CSS Overlay (Cleaned up for better visibility) */
+        #screen-fx {
+            position: absolute;
+            left: 0; top: 0;
+            width: 100%; height: 100%;
+            pointer-events: none;
+            z-index: 2;
+            box-shadow: inset 0 0 80px rgba(0,0,0,0.6);
+        }
+
+        /* 4. UI Elements */
+        #ui-layer {
+            position: absolute;
+            width: 100%; height: 100%;
+            pointer-events: none;
+            z-index: 3;
+        }
+
+        /* HUD Corners */
+        .corner {
+            position: absolute;
+            width: 8vw; height: 8vw;
+            border: 2px solid var(--hud-color);
+            opacity: 0.6;
+        }
+        .tl { top: 20px; left: 20px; border-right: none; border-bottom: none; border-radius: 10px 0 0 0; }
+        .tr { top: 20px; right: 20px; border-left: none; border-bottom: none; border-radius: 0 10px 0 0; }
+        .bl { bottom: 20px; left: 20px; border-right: none; border-top: none; border-radius: 0 0 0 10px; }
+        .br { bottom: 20px; right: 20px; border-left: none; border-top: none; border-radius: 0 0 10px 0; }
+
+        /* Data Readouts */
+        .status-bar {
+            position: absolute;
+            top: 40px; left: 50%;
+            transform: translateX(-50%);
+            text-align: center;
+            text-shadow: 0 0 10px var(--hud-color);
+        }
+
+        .status-title {
+            font-size: 24px;
+            font-weight: 700;
+            letter-spacing: 4px;
+            text-transform: uppercase;
+        }
+
+        .status-subtitle {
+            font-size: 14px;
+            letter-spacing: 2px;
+            opacity: 0.8;
+            margin-top: 5px;
+        }
+
+        #log-console {
+            position: absolute;
+            bottom: 40px; left: 40px;
+            font-family: monospace;
+            font-size: 12px;
+            color: rgba(0, 243, 255, 0.7);
+            line-height: 1.5;
+        }
+
+        /* Intro Screen */
+        #intro {
+            position: absolute;
+            top: 0; left: 0;
+            width: 100%; height: 100%;
+            background: #000;
+            z-index: 10;
+            display: flex;
+            flex-direction: column;
+            justify-content: center;
+            align-items: center;
+            transition: opacity 1s;
+        }
+        
+        #intro h1 {
+             letter-spacing: 5px; 
+             text-shadow: 0 0 20px #00f3ff;
+             margin-bottom: 10px;
+        }
+
+        .creator-credit {
+            font-size: 16px;
+            color: var(--hud-color);
+            opacity: 0.8;
+            margin-bottom: 40px;
+            letter-spacing: 2px;
+            text-transform: uppercase;
+        }
+
+        button.start-btn {
+            background: transparent;
+            border: 2px solid var(--hud-color);
+            color: var(--hud-color);
+            padding: 15px 40px;
+            font-family: 'Rajdhani', sans-serif;
+            font-size: 20px;
+            font-weight: bold;
+            letter-spacing: 2px;
+            cursor: pointer;
+            box-shadow: 0 0 15px var(--hud-color);
+            transition: all 0.3s;
+        }
+
+        button.start-btn:hover {
+            background: var(--hud-color);
+            color: #000;
+        }
+
+        /* Legend */
+        #legend {
+            position: absolute;
+            right: 40px;
+            bottom: 40px;
+            text-align: right;
+            font-size: 12px;
+            opacity: 0.7;
+        }
+        .key-item { margin-bottom: 5px; }
+        .k-color { display: inline-block; width: 10px; height: 10px; margin-left: 5px; }
+    </style>
+</head>
+<body>
+
+    <!-- VIDEO SOURCE (Hidden) -->
+    <video class="input_video"></video>
+
+    <!-- INTRO SCREEN -->
+    <div id="intro">
+        <h1>AIR CANVAS</h1>
+        <p style="margin-bottom: 10px; opacity: 0.7;">GESTURE CONTROLLED HOLOGRAPHIC INTERFACE</p>
+        <div class="creator-credit">Made by Deepanshu Sharma</div>
+        <button class="start-btn" onclick="startSystem()">INITIALIZE SYSTEM</button>
+    </div>
+
+    <!-- MAIN RENDERER -->
+    <canvas id="output_canvas"></canvas>
+
+    <!-- SCREEN FX -->
+    <div id="screen-fx"></div>
+
+    <!-- UI LAYER -->
+    <div id="ui-layer">
+        <!-- Corners -->
+        <div class="corner tl"></div>
+        <div class="corner tr"></div>
+        <div class="corner bl"></div>
+        <div class="corner br"></div>
+
+        <!-- Top Status -->
+        <div class="status-bar">
+            <div class="status-title" id="mode-text">SYSTEM STANDBY</div>
+            <div class="status-subtitle" id="sub-text">WAITING FOR BIOMETRIC INPUT</div>
+        </div>
+
+        <!-- Left Log -->
+        <div id="log-console">
+            <div>> PROTOCOL: GESTURE_RECOGNITION</div>
+            <div>> STATUS: ACTIVE</div>
+            <div id="debug-log">> WAITING...</div>
+        </div>
+
+        <!-- Right Legend -->
+        <div id="legend">
+            <div class="key-item">PINCH (Hold 0.5s) : DRAW <span class="k-color" style="background: #00f3ff;"></span></div>
+            <div class="key-item">FIST (Hold 2s) : MOVE <span class="k-color" style="background: #ffff00;"></span></div>
+            <div class="key-item">PINCH (Hold 1s) : ERASE <span class="k-color" style="background: #ff0055;"></span></div>
+        </div>
+    </div>
+
+    <script>
+        // --- CONFIGURATION ---
+        const CONFIG = {
+            colors: {
+                primary: '#00f3ff', // Cyan
+                alert: '#ff0055',   // Red/Pink
+                warn: '#ffff00',    // Yellow
+                glow: 'rgba(0, 243, 255, 0.4)'
+            },
+            timings: {
+                moveDelay: 2000,     // 2 seconds to lock move
+                eraserActivate: 1000, // 1 second to activate eraser
+                drawActivate: 400    // 0.4 second delay before drawing starts (stabilization)
+            },
+            grid: {
+                size: 30, // Pixel block size
+                gap: 2    // Gap between blocks
+            }
+        };
+
+        // --- DOM ELEMENTS ---
+        const videoElement = document.getElementsByClassName('input_video')[0];
+        const canvasElement = document.getElementById('output_canvas');
+        const ctx = canvasElement.getContext('2d');
+        const modeText = document.getElementById('mode-text');
+        const subText = document.getElementById('sub-text');
+        const debugLog = document.getElementById('debug-log');
+        const introScreen = document.getElementById('intro');
+
+        // --- STATE VARIABLES ---
+        let systemActive = false;
+        
+        // Drawing Data: Using a Map for O(1) lookups
+        let gridData = new Map();
+        
+        // Virtual camera position (raw pixels)
+        let canvasOffset = { x: 0, y: 0 }; 
+
+        // Smoothing Variables
+        let smoothHand = { x: 0, y: 0 };
+        const SMOOTHING_FACTOR = 0.2; // Lower = smoother but more delay
+
+        // Logic State
+        let fistHoldStart = 0;    // Timestamp for move gesture
+        let eraserHoldStart = 0;  // Timestamp for erase gesture
+        let drawHoldStart = 0;    // Timestamp for draw gesture
+        let lastHandPos = { x: 0, y: 0 }; // For calculating delta movement
+
+        // --- SYSTEM STARTUP ---
+        function startSystem() {
+            introScreen.style.opacity = 0;
+            setTimeout(() => { introScreen.style.display = 'none'; }, 1000);
+            
+            systemActive = true;
+            initCamera();
+        }
+
+        function resize() {
+            canvasElement.width = window.innerWidth;
+            canvasElement.height = window.innerHeight;
+        }
+        window.addEventListener('resize', resize);
+        resize();
+
+        // --- GEOMETRY HELPERS ---
+        function dist(p1, p2) {
+            return Math.hypot(p1.x - p2.x, p1.y - p2.y);
+        }
+
+        // --- GESTURE RECOGNITION ---
+        
+        function isPinch(landmarks) {
+            return dist(landmarks[8], landmarks[4]) < 0.05;
+        }
+
+        function isFist(landmarks) {
+            const tips = [8, 12, 16, 20]; 
+            const pips = [6, 10, 14, 18];
+            let curled = 0;
+            for(let i=0; i<4; i++) {
+                if(landmarks[tips[i]].y > landmarks[pips[i]].y) curled++;
+            }
+            return curled >= 3; 
+        }
+
+        // --- DRAWING ENGINE (DESIGNED CUBES) ---
+
+        function drawHoloBlock(ctx, c, r, color, offsetX, offsetY) {
+            const size = CONFIG.grid.size;
+            // Calculate screen position based on Grid Index + Global Offset
+            const x = (c * size) + offsetX;
+            const y = (r * size) + offsetY;
+
+            // 1. Base Block (No alpha stacking if we use Map)
+            // UPDATED: Transparency 35%
+            ctx.fillStyle = "rgba(0, 243, 255, 0.35)"; 
+            ctx.fillRect(x, y, size - 2, size - 2);
+            
+            // 2. Border
+            ctx.strokeStyle = "rgba(0, 243, 255, 0.9)";
+            ctx.lineWidth = 1;
+            ctx.strokeRect(x, y, size - 2, size - 2);
+
+            // 3. Inner Design (Tech Cross)
+            ctx.beginPath();
+            const pad = 6;
+            // Top Left to Bottom Right
+            ctx.moveTo(x + pad, y + pad);
+            ctx.lineTo(x + size - pad - 2, y + size - pad - 2);
+            // Top Right to Bottom Left
+            ctx.moveTo(x + size - pad - 2, y + pad);
+            ctx.lineTo(x + pad, y + size - pad - 2);
+            
+            ctx.strokeStyle = "rgba(255, 255, 255, 0.5)";
+            ctx.stroke();
+        }
+
+        // "Portal" Effect: Show grid around cursor
+        function drawLocalGrid(ctx, cx, cy) {
+            const size = CONFIG.grid.size;
+            const range = 4; // 4 blocks radius
+            
+            // Snap center
+            const startX = Math.floor(cx / size) * size;
+            const startY = Math.floor(cy / size) * size;
+            
+            ctx.strokeStyle = "rgba(0, 243, 255, 0.15)";
+            ctx.lineWidth = 1;
+            ctx.beginPath();
+
+            for(let i = -range; i <= range; i++) {
+                // Verticals
+                const x = startX + (i * size);
+                ctx.moveTo(x, startY - (range * size));
+                ctx.lineTo(x, startY + (range * size));
+
+                // Horizontals
+                const y = startY + (i * size);
+                ctx.moveTo(startX - (range * size), y);
+                ctx.lineTo(startX + (range * size), y);
+            }
+            ctx.stroke();
+        }
+
+        function renderGrid(ctx, offset) {
+            // Snap offset to prevent aliasing
+            const snappedOffsetX = Math.round(offset.x / CONFIG.grid.size) * CONFIG.grid.size;
+            const snappedOffsetY = Math.round(offset.y / CONFIG.grid.size) * CONFIG.grid.size;
+
+            gridData.forEach(block => {
+                drawHoloBlock(ctx, block.c, block.r, CONFIG.colors.primary, snappedOffsetX, snappedOffsetY);
+            });
+        }
+
+        function updateGrid(px, py, isErasing) {
+            const size = CONFIG.grid.size;
+            // Convert to Grid Index relative to Offset
+            const snappedOffsetX = Math.round(canvasOffset.x / size) * size;
+            const snappedOffsetY = Math.round(canvasOffset.y / size) * size;
+
+            const c = Math.floor((px - snappedOffsetX) / size);
+            const r = Math.floor((py - snappedOffsetY) / size);
+            const key = `${c},${r}`;
+
+            if (isErasing) {
+                if (gridData.has(key)) {
+                    gridData.delete(key);
+                }
+            } else {
+                if (!gridData.has(key)) {
+                    gridData.set(key, {c, r});
+                }
+            }
+        }
+
+        function drawHUDOverlay(ctx, handX, handY, color, text) {
+            ctx.beginPath();
+            ctx.arc(handX, handY, 30, 0, Math.PI * 2);
+            ctx.strokeStyle = color;
+            ctx.lineWidth = 2;
+            ctx.shadowBlur = 10;
+            ctx.shadowColor = color;
+            ctx.stroke();
+
+            ctx.font = "12px Rajdhani";
+            ctx.fillStyle = color;
+            ctx.fillText(text, handX + 40, handY);
+        }
+
+        // --- MAIN PROCESSING LOOP ---
+
+        function onResults(results) {
+            if (!systemActive) return;
+
+            // 1. CLEAR & DRAW VIDEO
+            ctx.clearRect(0, 0, canvasElement.width, canvasElement.height);
+            ctx.drawImage(results.image, 0, 0, canvasElement.width, canvasElement.height);
+
+            // 2. RENDER STROKES (Grid Mode)
+            renderGrid(ctx, canvasOffset);
+
+            // 3. HAND LOGIC
+            const handsData = results.multiHandLandmarks;
+            
+            if (handsData.length === 0) {
+                modeText.innerText = "SEARCHING...";
+                modeText.style.color = "#555";
+                fistHoldStart = 0;
+                eraserHoldStart = 0;
+                drawHoldStart = 0;
+                return;
+            }
+
+            // --- VISUALIZATION: DRAW SKELETONS ---
+            for (const landmarks of handsData) {
+                drawConnectors(ctx, landmarks, HAND_CONNECTIONS, 
+                              {color: 'rgba(0, 243, 255, 0.4)', lineWidth: 1});
+                drawLandmarks(ctx, landmarks, 
+                              {color: 'rgba(255, 255, 255, 0.5)', lineWidth: 0.5, radius: 2});
+            }
+
+            // --- SCENARIO: DUAL HANDS (ERASER) ---
+            if (handsData.length === 2) {
+                const hand2 = handsData[1]; // Left Hand
+                const h2x = hand2[8].x * canvasElement.width; // Index Tip
+                const h2y = hand2[8].y * canvasElement.height;
+                
+                drawHUDOverlay(ctx, h2x, h2y, CONFIG.colors.alert, "ERASER HAND");
+
+                if (isPinch(hand2)) {
+                    if (eraserHoldStart === 0) {
+                        eraserHoldStart = Date.now();
+                    }
+
+                    const duration = Date.now() - eraserHoldStart;
+
+                    if (duration < CONFIG.timings.eraserActivate) {
+                        // CHARGING ERASER
+                        modeText.innerText = "CHARGING ERASER";
+                        modeText.style.color = CONFIG.colors.alert;
+                        
+                        const pct = duration / CONFIG.timings.eraserActivate;
+                        subText.innerText = `HOLD TO ACTIVATE: ${Math.floor(pct * 100)}%`;
+                        
+                        // Loader Visual
+                        ctx.beginPath();
+                        ctx.arc(h2x, h2y, 40, -Math.PI/2, (-Math.PI/2) + (Math.PI * 2 * pct));
+                        ctx.strokeStyle = CONFIG.colors.alert;
+                        ctx.lineWidth = 4;
+                        ctx.stroke();
+
+                    } else {
+                        // ACTIVE ERASING
+                        modeText.innerText = "ERASER ACTIVE";
+                        modeText.style.color = CONFIG.colors.alert;
+                        subText.innerText = "REMOVING MATTER";
+                        
+                        updateGrid(h2x, h2y, true); // True = Erase
+                        
+                        // Visual Feedback
+                        ctx.beginPath();
+                        ctx.arc(h2x, h2y, 15, 0, Math.PI*2);
+                        ctx.fillStyle = CONFIG.colors.alert;
+                        ctx.fill();
+                    }
+                    return; // Eraser overrides other actions
+                } else {
+                    eraserHoldStart = 0; // Reset if pinch is released
+                }
+            } else {
+                eraserHoldStart = 0; // Reset if second hand disappears
+            }
+
+            // --- SCENARIO: PRIMARY HAND ---
+            const hand1 = handsData[0];
+            const idxTip = hand1[8];
+            
+            // Raw Position
+            const targetX = idxTip.x * canvasElement.width;
+            const targetY = idxTip.y * canvasElement.height;
+            
+            // SMOOTHING ALGORITHM (Lerp)
+            if (smoothHand.x === 0) { smoothHand.x = targetX; smoothHand.y = targetY; }
+            smoothHand.x = smoothHand.x + (targetX - smoothHand.x) * SMOOTHING_FACTOR;
+            smoothHand.y = smoothHand.y + (targetY - smoothHand.y) * SMOOTHING_FACTOR;
+            
+            const px = smoothHand.x;
+            const py = smoothHand.y;
+            
+            const cx = hand1[9].x * canvasElement.width;
+            const cy = hand1[9].y * canvasElement.height;
+
+            // DRAW LOGIC (Pinch)
+            if (isPinch(hand1)) {
+                fistHoldStart = 0; 
+                
+                // --- DRAW DELAY LOGIC ---
+                if (drawHoldStart === 0) {
+                    drawHoldStart = Date.now();
+                }
+                
+                const drawDuration = Date.now() - drawHoldStart;
+
+                if (drawDuration < CONFIG.timings.drawActivate) {
+                    // CHARGING DRAW
+                    modeText.innerText = "PREPARING INK";
+                    modeText.style.color = CONFIG.colors.primary;
+                    
+                    const pct = drawDuration / CONFIG.timings.drawActivate;
+                    subText.innerText = `STABILIZING: ${Math.floor(pct * 100)}%`;
+                    
+                    // Small Charging Circle
+                    ctx.beginPath();
+                    ctx.arc(px, py, 15, -Math.PI/2, (-Math.PI/2) + (Math.PI * 2 * pct));
+                    ctx.strokeStyle = CONFIG.colors.primary;
+                    ctx.lineWidth = 2;
+                    ctx.stroke();
+                } else {
+                    // ACTIVE DRAWING
+                    modeText.innerText = "HOLO-PEN ACTIVE";
+                    modeText.style.color = CONFIG.colors.primary;
+                    subText.innerText = "GRID INDEX: " + Math.floor(px/30) + ", " + Math.floor(py/30);
+                    
+                    // Show "Portal" Grid
+                    drawLocalGrid(ctx, px, py);
+
+                    // Add point
+                    updateGrid(px, py, false); // False = Draw
+
+                    // Visual Tip
+                    ctx.beginPath();
+                    ctx.arc(px, py, 6, 0, Math.PI*2);
+                    ctx.fillStyle = "#fff";
+                    ctx.fill();
+                }
+
+            } 
+            // MOVE LOGIC (Fist)
+            else if (isFist(hand1)) {
+                drawHoldStart = 0; // Reset draw timer
+                
+                if (fistHoldStart === 0) {
+                    fistHoldStart = Date.now();
+                    lastHandPos = {x: cx, y: cy};
+                }
+
+                const duration = Date.now() - fistHoldStart;
+                
+                if (duration < CONFIG.timings.moveDelay) {
+                    // CHARGING PHASE
+                    modeText.innerText = "LOCKING GRID";
+                    modeText.style.color = CONFIG.colors.warn;
+                    
+                    const pct = duration / CONFIG.timings.moveDelay;
+                    ctx.beginPath();
+                    ctx.arc(cx, cy, 50, -Math.PI/2, (-Math.PI/2) + (Math.PI * 2 * pct));
+                    ctx.strokeStyle = CONFIG.colors.warn;
+                    ctx.lineWidth = 6;
+                    ctx.stroke();
+                    
+                    subText.innerText = `HOLD TO MOVE: ${Math.floor(pct * 100)}%`;
+
+                } else {
+                    // LOCKED / MOVING PHASE
+                    modeText.innerText = "GRID REPOSITIONING";
+                    modeText.style.color = "#00ff00";
+                    subText.innerText = "HAND LOCKED";
+
+                    // Visual Lock
+                    ctx.beginPath();
+                    ctx.rect(cx - 50, cy - 50, 100, 100);
+                    ctx.strokeStyle = "#00ff00";
+                    ctx.lineWidth = 2;
+                    ctx.setLineDash([5, 5]);
+                    ctx.stroke();
+                    ctx.setLineDash([]);
+
+                    // Calculate Movement
+                    const dx = cx - lastHandPos.x;
+                    const dy = cy - lastHandPos.y;
+                    
+                    canvasOffset.x += dx;
+                    canvasOffset.y += dy;
+                    
+                    lastHandPos = {x: cx, y: cy};
+                }
+            } 
+            // HOVER / IDLE
+            else {
+                fistHoldStart = 0;
+                drawHoldStart = 0;
+                modeText.innerText = "ACTIVE TRACKING";
+                modeText.style.color = CONFIG.colors.primary;
+                subText.innerText = "AWAITING GESTURE";
+
+                drawHUDOverlay(ctx, px, py, CONFIG.colors.primary, "TARGET");
+            }
+        }
+
+        // --- MEDIAPIPE SETUP ---
+        function initCamera() {
+            const hands = new Hands({locateFile: (file) => {
+                return `https://cdn.jsdelivr.net/npm/@mediapipe/hands/${file}`;
+            }});
+
+            hands.setOptions({
+                maxNumHands: 2,
+                modelComplexity: 1,
+                minDetectionConfidence: 0.7,
+                minTrackingConfidence: 0.7
+            });
+
+            hands.onResults(onResults);
+
+            const camera = new Camera(videoElement, {
+                onFrame: async () => {
+                    await hands.send({image: videoElement});
+                },
+                width: 1280,
+                height: 720
+            });
+            camera.start();
+            
+            debugLog.innerText = "> CAM_INIT: SUCCESS\n> AI_MODEL: LOADING...";
+        }
+
+    </script>
+</body>
+</html>
